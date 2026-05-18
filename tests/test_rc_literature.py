@@ -248,6 +248,74 @@ class TestSemanticScholar:
         papers = search_semantic_scholar("test", limit=5)
         assert papers == []
 
+    def test_search_semantic_scholar_uses_env_api_key(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """S2 API key can be provided by environment for CLI runs."""
+        from researchclaw.literature.semantic_scholar import _reset_circuit_breaker
+
+        _reset_circuit_breaker()
+        monkeypatch.setenv("SEMANTIC_SCHOLAR_API_KEY", "s2-test-key")
+        monkeypatch.setattr(
+            "researchclaw.literature.semantic_scholar.time.sleep", lambda _: None
+        )
+
+        response_bytes = json.dumps(SAMPLE_S2_RESPONSE).encode("utf-8")
+        mock_resp = MagicMock()
+        mock_resp.read.return_value = response_bytes
+        mock_resp.__enter__ = lambda s: s
+        mock_resp.__exit__ = MagicMock(return_value=False)
+
+        seen_headers: dict[str, str] = {}
+
+        def fake_urlopen(req, *args, **kwargs):
+            _ = args, kwargs
+            seen_headers.update(req.headers)
+            return mock_resp
+
+        monkeypatch.setattr(
+            "researchclaw.literature.semantic_scholar.urllib.request.urlopen",
+            fake_urlopen,
+        )
+
+        papers = search_semantic_scholar("transformers", limit=5)
+        assert len(papers) == 1
+        assert seen_headers.get("X-api-key") == "s2-test-key"
+
+    def test_search_semantic_scholar_honors_retry_after(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """429 backoff should honor Semantic Scholar Retry-After headers."""
+        from researchclaw.literature.semantic_scholar import _reset_circuit_breaker
+        import urllib.error
+
+        _reset_circuit_breaker()
+        waits: list[float] = []
+
+        def always_429(*args, **kwargs):
+            _ = args, kwargs
+            raise urllib.error.HTTPError(
+                "https://api.semanticscholar.org",
+                429,
+                "Too Many Requests",
+                {"Retry-After": "7"},
+                None,
+            )
+
+        monkeypatch.setattr(
+            "researchclaw.literature.semantic_scholar.urllib.request.urlopen",
+            always_429,
+        )
+        monkeypatch.setattr(
+            "researchclaw.literature.semantic_scholar.time.sleep",
+            lambda seconds: waits.append(seconds),
+        )
+
+        papers = search_semantic_scholar("test", limit=5)
+        assert papers == []
+        assert waits
+        assert any(wait >= 7 for wait in waits)
+
 
 # ──────────────────────────────────────────────────────────────────────
 # arXiv client tests

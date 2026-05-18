@@ -1,0 +1,43 @@
+{
+  "api_patterns": [
+    "import pandas as pd\n\ndf = pd.read_csv(\"cohort.csv\")\ndf = df.dropna(subset=[\"bcaas\", \"t2d_event\", \"homa_ir\"])\ndf[\"central_obesity\"] = df[\"waist_cm\"] >= 90",
+    "import numpy as np\n\nx = df[[\"bcaas\", \"age\", \"sex\", \"homa_ir\"]].to_numpy()\ny = df[\"t2d_event\"].to_numpy()\nx = np.column_stack([np.ones(len(x)), x])",
+    "from scipy import stats\n\ncase = df.loc[df[\"t2d_event\"] == 1, \"bcaas\"]\ncontrol = df.loc[df[\"t2d_event\"] == 0, \"bcaas\"]\nt_stat, p_value = stats.ttest_ind(case, control, nan_policy=\"omit\")",
+    "import matplotlib.pyplot as plt\n\nsummary = df.groupby(\"bcaas_quartile\")[\"t2d_event\"].mean()\nsummary.plot(kind=\"bar\")\nplt.ylabel(\"T2D incidence\")\nplt.tight_layout()\nplt.savefig(\"results/bcaa_t2d_incidence.png\")",
+    "import json\nfrom dataclasses import asdict\n\nreport = {\"model\": \"BCAA + covariates\", \"p_value\": float(p_value)}\nwith open(\"results/report.json\", \"w\") as f:\n    json.dump(report, f, indent=2)"
+  ],
+  "file_structure": {
+    "analysis.py": "Main cohort analysis script: load data, preprocess variables, fit models, export results",
+    "config.py": "Store input paths, covariate lists, biomarker names, and analysis settings",
+    "models.py": "Reusable statistical model functions for crude and adjusted analyses",
+    "plots.py": "Generate publication-style figures using matplotlib",
+    "report.py": "Serialize model outputs, tables, and sensitivity analyses to JSON or CSV"
+  },
+  "evaluation_patterns": [
+    "Compute crude association between BCAA level and incident T2D.",
+    "Compare adjusted models with and without insulin resistance proxy variables.",
+    "Report effect estimates, confidence intervals, p-values, and sample size.",
+    "Export machine-readable JSON results plus CSV tables for manuscript use.",
+    "Generate stratified summaries by BCAA quartile and central obesity status."
+  ],
+  "library_versions": {
+    "python": ">=3.10",
+    "numpy": ">=1.26",
+    "scipy": ">=1.11",
+    "pandas": ">=2.1",
+    "matplotlib": ">=3.8"
+  },
+  "repos": [],
+  "queries": [
+    "branched chain amino acids diabetes pandas",
+    "T2D risk insulin resistance python",
+    "central obesity metabolomics pandas",
+    "numpy scipy logistic regression cohort",
+    "matplotlib metabolomics diabetes analysis",
+    "scientific computing python",
+    "computational experiment"
+  ],
+  "_cached_at": 1778401954.5822341,
+  "_domain_id": "generic",
+  "_topic_hash": "1ef85cb9511d81f6"
+}

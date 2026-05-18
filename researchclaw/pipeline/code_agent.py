@@ -224,6 +224,7 @@ class CodeAgent:
             files = self._phase2_sequential_generate(
                 topic, exp_plan, metric, pkg_hint, arch_spec, blueprint,
             )
+            self._persist_files_snapshot(files, "generated_initial")
             # Hard validation gates (E-03)
             if self._cfg.hard_validation:
                 files = self._hard_validate_and_repair(
@@ -244,6 +245,7 @@ class CodeAgent:
             files = self._phase2_generate_and_fix(
                 topic, exp_plan, metric, pkg_hint, arch_spec, max_tokens,
             )
+            self._persist_files_snapshot(files, "generated_initial")
             # Hard validation gates (E-03) for single-shot too
             if self._cfg.hard_validation and files:
                 files = self._hard_validate_and_repair(
@@ -698,9 +700,22 @@ class CodeAgent:
                 return files
 
             # Targeted repair: ask LLM to fix specific critical issues
-            files = self._repair_critical_issues(
-                files, critical, topic, exp_plan, metric, arch_spec,
+            self._persist_files_snapshot(
+                files, f"hard_validation_attempt_{attempt:03d}",
             )
+            try:
+                files = self._repair_critical_issues(
+                    files, critical, topic, exp_plan, metric, arch_spec,
+                )
+                self._persist_files_snapshot(
+                    files, f"hard_validation_repaired_{attempt:03d}",
+                )
+            except Exception as exc:  # noqa: BLE001
+                self._log_event(
+                    "  WARNING: Critical-issue repair LLM call failed; "
+                    f"continuing with current files for exec-fix: {exc}"
+                )
+                return files
 
         return files
 
@@ -897,7 +912,19 @@ class CodeAgent:
         if not affected_files:
             affected_files.update(f for f in files if f.endswith(".py"))
 
-        files_ctx = self._format_files(files)
+        repair_files = {
+            fname: files[fname]
+            for fname in sorted(affected_files)
+            if fname in files
+        }
+        if not repair_files:
+            repair_files = {
+                fname: code
+                for fname, code in files.items()
+                if fname.endswith(".py")
+            }
+        files_ctx = self._format_files(repair_files)
+        unaffected = sorted(set(files) - set(repair_files))
         issues_text = "\n".join(f"- {issue}" for issue in critical_issues)
 
         prompt = (
@@ -909,6 +936,8 @@ class CodeAgent:
             f"{arch_spec[:4000]}\n\n"
             "## Current Code\n"
             f"{files_ctx}\n\n"
+            "## Other Existing Files\n"
+            f"{', '.join(unaffected) if unaffected else '(none)'}\n\n"
             "## Rules\n"
             "1. Fix every critical issue listed above\n"
             "2. Ablation/variant classes MUST have different implementations "
@@ -916,7 +945,7 @@ class CodeAgent:
             "3. Never hardcode metric values — compute them from actual data\n"
             "4. nn.Module layers must be created in __init__(), not forward()\n"
             "5. All cross-file imports must reference names that actually exist\n"
-            "6. Output ALL files in ```filename:xxx.py``` format\n"
+            "6. Output only changed files in ```filename:xxx.py``` format\n"
         )
 
         sys_prompt = self._pm.system("code_generation")
@@ -934,6 +963,35 @@ class CodeAgent:
 
         self._log_event("  WARNING: Repair produced no extractable files")
         return files
+
+    def _persist_files_snapshot(
+        self,
+        files: dict[str, str],
+        label: str,
+    ) -> None:
+        """Persist current generated files so Stage 10 can recover after ACP failures."""
+        if not files:
+            return
+        safe_label = re.sub(r"[^A-Za-z0-9_.-]+", "_", label).strip("_")
+        if not safe_label:
+            safe_label = "snapshot"
+        snap_dir = self._stage_dir / "agent_runs" / safe_label
+        try:
+            snap_dir.mkdir(parents=True, exist_ok=True)
+            for fname, code in files.items():
+                fpath = (snap_dir / fname).resolve()
+                if not fpath.is_relative_to(snap_dir.resolve()):
+                    self._log_event(
+                        f"  WARNING: Skipping path-traversal snapshot file: {fname}"
+                    )
+                    continue
+                fpath.parent.mkdir(parents=True, exist_ok=True)
+                fpath.write_text(code, encoding="utf-8")
+            self._log_event(
+                f"  Snapshot saved: {snap_dir.name} ({len(files)} files)"
+            )
+        except Exception as exc:  # noqa: BLE001
+            self._log_event(f"  WARNING: Failed to save snapshot {label}: {exc}")
 
     # ── Phase 2b: Single-Shot Generate + Exec-Fix (legacy) ───────────────
 
@@ -1425,6 +1483,18 @@ class CodeAgent:
         # Run using the sandbox
         sandbox = self._get_or_create_sandbox()
         try:
+            sandbox_cfg = getattr(self._exp_config, "sandbox", None)
+            python_path = getattr(sandbox_cfg, "python_path", "")
+            if python_path:
+                from researchclaw.pipeline._helpers import _ensure_sandbox_deps
+
+                all_code = "\n\n".join(files.values())
+                installed = _ensure_sandbox_deps(all_code, python_path)
+                if installed:
+                    self._log_event(
+                        "  Sandbox auto-installed deps: "
+                        + ", ".join(installed)
+                    )
             result = sandbox.run_project(run_dir, timeout_sec=timeout)
         except Exception as exc:
             self._log_event(f"  Sandbox run failed: {exc}")

@@ -1,0 +1,47 @@
+{
+  "api_patterns": [
+    "import pandas as pd\nimport numpy as np\n\ndf = pd.read_csv('cohort_metabolites.csv')\ndf = df.dropna(subset=['t2d', 'ckd', 'egfr'])\nmetabolites = df.filter(regex='^met_')",
+    "from sklearn.preprocessing import StandardScaler\n\nX = df[metabolite_cols + covariate_cols]\ny = df['t2d_ckd_comorbidity'].astype(int)\nX_scaled = StandardScaler().fit_transform(X)",
+    "from sklearn.model_selection import StratifiedKFold\nfrom sklearn.linear_model import LogisticRegression\n\ncv = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)\nmodel = LogisticRegression(max_iter=1000)\nfor train_idx, test_idx in cv.split(X_scaled, y):\n    model.fit(X_scaled[train_idx], y.iloc[train_idx])",
+    "from sklearn.metrics import roc_curve, auc\n\nprob = model.predict_proba(X_scaled[test_idx])[:, 1]\nfpr, tpr, _ = roc_curve(y.iloc[test_idx], prob)\nroc_auc = auc(fpr, tpr)",
+    "import matplotlib.pyplot as plt\n\nplt.figure(figsize=(4, 3), dpi=300)\nplt.plot(fpr, tpr, label=f'AUC={roc_auc:.2f}')\nplt.xlabel('False positive rate')\nplt.ylabel('True positive rate')\nplt.legend(frameon=False)\nplt.savefig('roc_curve.pdf', bbox_inches='tight')"
+  ],
+  "file_structure": {
+    "config.py": "Store paths, phenotype names, metabolite column patterns, covariates, and plotting constants.",
+    "load_data.py": "Load cohort phenotype, kidney function markers, and metabolomics tables; merge by participant ID.",
+    "preprocess.py": "Clean missing values, transform skewed metabolites, standardize predictors, and define T2D-CKD outcome groups.",
+    "association_analysis.py": "Run metabolite-wise associations with T2D, CKD, eGFR, and comorbidity outcomes.",
+    "mediation_analysis.py": "Estimate whether kidney-function-related metabolites mediate central obesity and T2D-CKD comorbidity risk.",
+    "risk_model.py": "Train logistic regression or tree-based models using covariates and metabolite panels.",
+    "figures.py": "Generate publication-quality ROC curves, forest plots, heatmaps, and correlation plots.",
+    "report.py": "Save tables, model metrics, figures, and summary JSON files for reproducible reporting."
+  },
+  "evaluation_patterns": [
+    "Compute cross-validated ROC AUC for binary T2D-CKD comorbidity prediction and report mean AUC across folds.",
+    "Compare baseline covariate-only models against covariate-plus-metabolite models to quantify added predictive value.",
+    "Use metabolite-wise regression coefficients, p-values, confidence intervals, and multiple-testing correction for association ranking.",
+    "Report mediation effects as total effect, direct effect, indirect effect, and proportion mediated.",
+    "Save all outputs as CSV tables, PDF or PNG figures, and a machine-readable JSON summary."
+  ],
+  "library_versions": {
+    "numpy": ">=1.24",
+    "scipy": ">=1.10",
+    "pandas": ">=2.0",
+    "matplotlib": ">=3.7",
+    "seaborn": ">=0.12",
+    "scikit-learn": ">=1.3"
+  },
+  "repos": [],
+  "queries": [
+    "kidney function metabolites pandas analysis",
+    "T2D CKD metabolomics python",
+    "obesity diabetes CKD risk model",
+    "pandas scipy metabolomics mediation",
+    "numpy matplotlib cohort analysis",
+    "scientific computing python",
+    "computational experiment"
+  ],
+  "_cached_at": 1778401957.766376,
+  "_domain_id": "generic",
+  "_topic_hash": "d1019c2843b5bceb"
+}

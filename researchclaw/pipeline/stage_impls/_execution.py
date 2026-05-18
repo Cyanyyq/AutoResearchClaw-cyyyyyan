@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import math
+import os
 import re
 import time as _time
 from pathlib import Path
@@ -130,6 +131,7 @@ def _execute_experiment_run(
     runs_dir = stage_dir / "runs"
     runs_dir.mkdir(parents=True, exist_ok=True)
     mode = config.experiment.mode
+    stage_failure_error: str | None = None
     if mode in ("sandbox", "docker"):
         # P7: Auto-install missing dependencies before subprocess sandbox
         if mode == "sandbox":
@@ -230,6 +232,14 @@ def _execute_experiment_run(
         (runs_dir / "run-1.json").write_text(
             json.dumps(run_payload, indent=2), encoding="utf-8"
         )
+        if run_status == "failed" and os.environ.get(
+            "RESEARCHCLAW_ALLOW_FAILED_EXPERIMENT", ""
+        ).lower() not in ("1", "true", "yes"):
+            stage_failure_error = (
+                "Experiment run failed in Stage 12; stopping before paper writing. "
+                "Set RESEARCHCLAW_ALLOW_FAILED_EXPERIMENT=1 to keep legacy "
+                "graceful-degradation behavior."
+            )
 
         # R11-6: Time budget adequacy check
         if result.timed_out or (result.elapsed_sec and result.elapsed_sec > config.experiment.time_budget_sec * 0.9):
@@ -325,6 +335,14 @@ def _execute_experiment_run(
             (runs_dir / f"{_safe_filename(run_id)}.json").write_text(
                 json.dumps(payload, indent=2), encoding="utf-8"
             )
+    if stage_failure_error is not None:
+        return StageResult(
+            stage=Stage.EXPERIMENT_RUN,
+            status=StageStatus.FAILED,
+            artifacts=("runs/",),
+            error=stage_failure_error,
+            evidence_refs=("stage-12/runs/",),
+        )
     return StageResult(
         stage=Stage.EXPERIMENT_RUN,
         status=StageStatus.DONE,

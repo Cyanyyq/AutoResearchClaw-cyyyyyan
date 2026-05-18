@@ -1,0 +1,51 @@
+{
+  "api_patterns": [
+    "import numpy as np\nimport pandas as pd\nimport matplotlib.pyplot as plt\nfrom scipy import stats\nfrom sklearn.model_selection import train_test_split\nfrom sklearn.preprocessing import MinMaxScaler",
+    "metabolomics = pd.read_csv('metabolomics.csv')\nclinical = pd.read_csv('clinical.csv')\noutcomes = pd.read_csv('cvd_outcomes.csv')\ndata = metabolomics.merge(clinical, on='sample_id')\ndata = data.merge(outcomes, on='sample_id')",
+    "feature_cols = [c for c in data.columns if c.startswith('met_')]\nX = data[feature_cols].replace([np.inf, -np.inf], np.nan)\nX = X.fillna(X.median())\ny = data['cvd_event'].astype(int)",
+    "X_train, X_test, y_train, y_test = train_test_split(\n    X, y, test_size=0.2, random_state=42, stratify=y\n)\nscaler = MinMaxScaler()\nX_train = scaler.fit_transform(X_train)\nX_test = scaler.transform(X_test)",
+    "from sklearn.decomposition import PCA\npca = PCA(n_components=20, random_state=42)\nX_train_pca = pca.fit_transform(X_train)\nX_test_pca = pca.transform(X_test)\nexplained = pca.explained_variance_ratio_.sum()",
+    "from sksurv.util import Surv\nfrom sksurv.ensemble import RandomSurvivalForest\ny_surv = Surv.from_dataframe('cvd_event', 'followup_time', data)\nmodel = RandomSurvivalForest(n_estimators=200, random_state=42)\nmodel.fit(X_train, y_surv_train)",
+    "fig, ax = plt.subplots(figsize=(6, 4))\nax.scatter(scores[:, 0], scores[:, 1], c=data['cvd_event'], cmap='viridis')\nax.set_xlabel('PC1')\nax.set_ylabel('PC2')\nplt.tight_layout()\nplt.savefig('pca_metabolomics_cvd.pdf')"
+  ],
+  "file_structure": {
+    "load_data.py": "Load metabolomics, clinical covariates, and cardiovascular outcome tables; merge by participant or sample ID.",
+    "preprocess.py": "Handle missing values, normalize metabolite features, remove invalid values, and create model-ready matrices.",
+    "feature_selection.py": "Select metabolite biomarkers using variance filtering, statistical tests, regularization, or PCA.",
+    "train_model.py": "Train risk prediction models such as logistic regression, Cox models, survival forests, or gradient boosting.",
+    "evaluate.py": "Compute discrimination metrics such as AUC, concordance index, confusion matrix, and calibration summaries.",
+    "visualize.py": "Generate PCA plots, feature importance plots, risk score distributions, and publication-ready figures.",
+    "config.yaml": "Store paths, feature column rules, outcome names, model parameters, and random seeds."
+  },
+  "evaluation_patterns": [
+    "from sklearn.metrics import roc_auc_score, confusion_matrix\nrisk_score = model.predict_proba(X_test)[:, 1]\nauc = roc_auc_score(y_test, risk_score)\npred = (risk_score >= 0.5).astype(int)\ncm = confusion_matrix(y_test, pred)",
+    "from sksurv.metrics import concordance_index_censored\nrisk_score = model.predict(X_test)\ncindex = concordance_index_censored(\n    y_event_test.astype(bool), y_time_test, risk_score\n)[0]",
+    "results = pd.DataFrame({\n    'sample_id': test_ids,\n    'observed_event': y_test,\n    'risk_score': risk_score\n})\nresults.to_csv('cvd_risk_predictions.csv', index=False)",
+    "importance = pd.Series(model.feature_importances_, index=feature_cols)\nimportance = importance.sort_values(ascending=False).head(20)\nimportance.to_csv('top_metabolite_features.csv')",
+    "summary = pd.DataFrame([{\n    'model': 'RandomSurvivalForest',\n    'n_features': len(feature_cols),\n    'c_index': cindex,\n    'auc': auc\n}])\nsummary.to_csv('model_metrics.csv', index=False)"
+  ],
+  "library_versions": {
+    "numpy": ">=1.24",
+    "scipy": ">=1.10",
+    "pandas": ">=2.0",
+    "matplotlib": ">=3.7",
+    "scikit-learn": ">=1.3",
+    "scikit-survival": ">=0.22",
+    "lifelines": ">=0.27",
+    "seaborn": ">=0.12",
+    "marimo": "0.13.9"
+  },
+  "repos": [],
+  "queries": [
+    "diabetes metabolomics cardiovascular risk python",
+    "pandas metabolomics risk prediction",
+    "numpy scipy biomarker feature selection",
+    "matplotlib metabolomics cohort visualization",
+    "diabetes CVD prediction pandas",
+    "scientific computing python",
+    "computational experiment"
+  ],
+  "_cached_at": 1778317438.721521,
+  "_domain_id": "generic",
+  "_topic_hash": "06ad02472acda195"
+}

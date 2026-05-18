@@ -64,6 +64,81 @@ def _check_rl_compatibility(code: str) -> list[str]:
     return errors
 
 
+def _recover_code_agent_files(stage_dir: Path) -> tuple[dict[str, str], dict[str, Any]]:
+    """Recover the newest usable files written by CodeAgent before a crash.
+
+    CodeAgent writes candidates to ``agent_runs/attempt_*`` and also snapshots
+    intermediate generated files to ``agent_runs/generated_*`` /
+    ``agent_runs/hard_validation_*``.  The sandbox copies runnable attempts to
+    ``agent_sandbox/_project_*``.  A later ACP review/repair call can fail
+    after usable code already exists; in that case we should not discard it.
+    """
+    candidate_dirs: list[Path] = []
+    for parent_name, pattern in (
+        ("agent_sandbox", "_project_*"),
+        ("agent_runs", "attempt_*"),
+        ("agent_runs", "generated_*"),
+        ("agent_runs", "hard_validation_*"),
+    ):
+        parent = stage_dir / parent_name
+        if parent.exists():
+            candidate_dirs.extend(p for p in parent.glob(pattern) if p.is_dir())
+
+    def _candidate_key(path: Path) -> tuple[int, float]:
+        has_results = 1 if (path / "results.json").exists() else 0
+        mtimes = [p.stat().st_mtime for p in path.glob("*.py") if p.is_file()]
+        newest = max(mtimes) if mtimes else path.stat().st_mtime
+        return has_results, newest
+
+    for candidate in sorted(candidate_dirs, key=_candidate_key, reverse=True):
+        py_files = [
+            p for p in sorted(candidate.glob("*.py"))
+            if p.name != "experiment_harness.py"
+        ]
+        if not py_files or not (candidate / "main.py").exists():
+            continue
+
+        files: dict[str, str] = {}
+        for py_file in py_files:
+            try:
+                files[py_file.name] = py_file.read_text(encoding="utf-8")
+            except UnicodeDecodeError:
+                logger.warning(
+                    "Stage 10 recovery skipped unreadable file: %s", py_file
+                )
+                files = {}
+                break
+        if not files or "main.py" not in files:
+            continue
+
+        main_validation = validate_code(files["main.py"])
+        if not main_validation.ok:
+            logger.warning(
+                "Stage 10 recovery candidate %s rejected: %s",
+                candidate,
+                main_validation.summary(),
+            )
+            continue
+
+        metadata: dict[str, Any] = {
+            "source_dir": str(candidate),
+            "files": sorted(files),
+            "has_results_json": (candidate / "results.json").exists(),
+            "recovered_at": _utcnow_iso(),
+        }
+        if (candidate / "results.json").exists():
+            try:
+                metadata["results_preview"] = _safe_json_loads(
+                    (candidate / "results.json").read_text(encoding="utf-8"),
+                    {},
+                )
+            except Exception:  # noqa: BLE001
+                metadata["results_preview"] = "unreadable"
+        return files, metadata
+
+    return {}, {}
+
+
 def _execute_code_generation(
     stage_dir: Path,
     run_dir: Path,
@@ -513,41 +588,62 @@ def _execute_code_generation(
             domain_profile=_domain_profile,
             code_search_result=_code_search_result,
         )
-        _agent_result = _agent.generate(
-            topic=config.research.topic,
-            exp_plan=exp_plan,
-            metric=metric,
-            pkg_hint=pkg_hint + "\n" + compute_budget + "\n" + extra_guidance,
-            max_tokens=_code_max_tokens,
-        )
-        files = _agent_result.files
-        _code_agent_active = True
-
-        # Write agent artifacts
-        (stage_dir / "code_agent_log.json").write_text(
-            json.dumps(
-                {
-                    "log": _agent_result.validation_log,
-                    "llm_calls": _agent_result.total_llm_calls,
-                    "sandbox_runs": _agent_result.total_sandbox_runs,
-                    "best_score": _agent_result.best_score,
-                    "tree_nodes_explored": _agent_result.tree_nodes_explored,
-                    "review_rounds": _agent_result.review_rounds,
-                },
-                indent=2,
-            ),
-            encoding="utf-8",
-        )
-        if _agent_result.architecture_spec:
-            (stage_dir / "architecture_spec.yaml").write_text(
-                _agent_result.architecture_spec, encoding="utf-8",
+        try:
+            _agent_result = _agent.generate(
+                topic=config.research.topic,
+                exp_plan=exp_plan,
+                metric=metric,
+                pkg_hint=pkg_hint + "\n" + compute_budget + "\n" + extra_guidance,
+                max_tokens=_code_max_tokens,
             )
-        logger.info(
-            "CodeAgent: %d LLM calls, %d sandbox runs, score=%.2f",
-            _agent_result.total_llm_calls,
-            _agent_result.total_sandbox_runs,
-            _agent_result.best_score,
-        )
+            files = _agent_result.files
+            _code_agent_active = True
+
+            # Write agent artifacts
+            (stage_dir / "code_agent_log.json").write_text(
+                json.dumps(
+                    {
+                        "log": _agent_result.validation_log,
+                        "llm_calls": _agent_result.total_llm_calls,
+                        "sandbox_runs": _agent_result.total_sandbox_runs,
+                        "best_score": _agent_result.best_score,
+                        "tree_nodes_explored": _agent_result.tree_nodes_explored,
+                        "review_rounds": _agent_result.review_rounds,
+                    },
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+            if _agent_result.architecture_spec:
+                (stage_dir / "architecture_spec.yaml").write_text(
+                    _agent_result.architecture_spec, encoding="utf-8",
+                )
+            logger.info(
+                "CodeAgent: %d LLM calls, %d sandbox runs, score=%.2f",
+                _agent_result.total_llm_calls,
+                _agent_result.total_sandbox_runs,
+                _agent_result.best_score,
+            )
+        except Exception as exc:  # noqa: BLE001
+            recovered_files, recovery_meta = _recover_code_agent_files(stage_dir)
+            if not recovered_files:
+                raise
+            files = recovered_files
+            _code_agent_active = True
+            validation_log.append(
+                "CodeAgent failed after writing recoverable files; "
+                f"using {recovery_meta.get('source_dir', 'unknown source')}"
+            )
+            recovery_meta["error"] = str(exc)
+            logger.warning(
+                "CodeAgent failed after writing recoverable files; "
+                "continuing with %s",
+                recovery_meta.get("source_dir", "unknown source"),
+            )
+            (stage_dir / "code_agent_recovery.json").write_text(
+                json.dumps(recovery_meta, indent=2, ensure_ascii=False),
+                encoding="utf-8",
+            )
     elif not _beast_mode_used and llm is not None:
         # ── Legacy single-shot generation ─────────────────────────────────
         topic = config.research.topic
@@ -1361,4 +1457,3 @@ Multi-file experiment project with {len(files)} file(s): {file_list}
         artifacts=tuple(artifacts),
         evidence_refs=tuple(f"stage-10/{a}" for a in artifacts),
     )
-

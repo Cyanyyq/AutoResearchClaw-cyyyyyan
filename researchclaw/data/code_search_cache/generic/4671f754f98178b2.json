@@ -1,0 +1,52 @@
+{
+  "api_patterns": [
+    "import numpy as np\nimport pandas as pd\nfrom scipy import stats\nimport matplotlib.pyplot as plt\n\nnp.random.seed(42)\npd.set_option('display.max_columns', None)",
+    "prevalence_df = df[\n    (df['Question'] == 'Diabetes among adults') &\n    (df['DataValueType'] == 'Crude Prevalence') &\n    (df['Stratification1'] == 'Overall')\n].copy()",
+    "summary = df.groupby(['sex', 'central_obesity']).agg({\n    't2d': ['mean', 'count'],\n    'bmi': ['mean', 'std'],\n    'age': ['mean', 'std']\n}).round(3)",
+    "metabolite_cols = [c for c in df.columns if c.startswith('met_')]\nresults = []\nfor met in metabolite_cols:\n    male = df.loc[df['sex'] == 'Male', met].dropna()\n    female = df.loc[df['sex'] == 'Female', met].dropna()\n    stat, p = stats.ttest_ind(male, female, equal_var=False)\n    results.append({'metabolite': met, 't_stat': stat, 'p_value': p})",
+    "table = pd.crosstab(df['hypertension'], df['t2d'])\nodds_ratio, p_value = stats.fisher_exact(table)\nresult = {\n    'variable': 'hypertension',\n    'odds_ratio': odds_ratio,\n    'p_value': p_value\n}",
+    "results_df = pd.DataFrame(results)\nresults_df['rank'] = results_df['p_value'].rank(method='first')\nresults_df['fdr'] = results_df['p_value'] * len(results_df) / results_df['rank']\nresults_df = results_df.sort_values('p_value')",
+    "fig, ax = plt.subplots(figsize=(8, 5))\nplot_df = results_df.head(20)\nax.barh(plot_df['metabolite'], -np.log10(plot_df['p_value']))\nax.set_xlabel('-log10(P value)')\nax.set_ylabel('Metabolite')\nfig.tight_layout()",
+    "output_dir.mkdir(parents=True, exist_ok=True)\nresults_df.to_csv(output_dir / 'metabolite_sex_difference.csv', index=False)\nwith open(output_dir / 'summary.json', 'w') as f:\n    json.dump(summary_dict, f, indent=2)"
+  ],
+  "file_structure": {
+    "config.py": "Define input paths, output paths, feature groups, phenotype names, and analysis constants.",
+    "data_loader.py": "Load cohort phenotype data, metabolomics matrices, and covariate tables into pandas DataFrames.",
+    "preprocessing.py": "Clean missing values, harmonize sex and obesity variables, encode binary comorbidities, and merge datasets.",
+    "analysis/descriptive.py": "Compute grouped descriptive statistics by sex, central obesity status, diabetes status, and comorbidity groups.",
+    "analysis/metabolite_tests.py": "Run metabolite-level statistical comparisons and association tests using scipy and pandas.",
+    "analysis/comorbidity.py": "Calculate odds ratios, contingency tables, comorbidity counts, and cardiometabolic risk summaries.",
+    "visualization.py": "Create bar plots, heatmaps, volcano-style plots, and summary figures with matplotlib.",
+    "main.py": "Coordinate the full workflow from loading data to analysis, visualization, and result export.",
+    "outputs/summary.json": "Store key numerical summaries and metadata for reproducibility.",
+    "outputs/metabolite_results.csv": "Store metabolite-level statistics, p-values, FDR values, and effect estimates."
+  },
+  "evaluation_patterns": [
+    "Use pandas groupby and agg to report mean, standard deviation, minimum, maximum, and sample size across sex and obesity strata.",
+    "Compute year-over-year or group-to-group differences as absolute change and percentage change, then store results as dictionaries or DataFrames.",
+    "For each binary comorbidity, build a contingency table and report odds ratio, confidence interval if available, and p-value.",
+    "For each metabolite, run sex-stratified or obesity-stratified statistical tests, then rank metabolites by p-value and adjusted FDR.",
+    "Report cumulative cardiometabolic burden by summing binary comorbidity indicators into a comorbidity count variable.",
+    "Export machine-readable outputs such as CSV for tables and JSON for summary metadata.",
+    "Generate compact plots showing top metabolites, risk-factor odds ratios, correlation heatmaps, and stratified prevalence patterns."
+  ],
+  "library_versions": {
+    "numpy": ">=1.26",
+    "pandas": ">=2.2",
+    "scipy": ">=1.12",
+    "matplotlib": ">=3.8"
+  },
+  "repos": [],
+  "queries": [
+    "metabolomics diabetes obesity pandas",
+    "cardiometabolic risk metabolomics python",
+    "diabetes comorbidity scipy pandas",
+    "metabolomics sex differences matplotlib",
+    "obesity metabolomics numpy scipy",
+    "scientific computing python",
+    "computational experiment"
+  ],
+  "_cached_at": 1778413904.303343,
+  "_domain_id": "generic",
+  "_topic_hash": "4671f754f98178b2"
+}

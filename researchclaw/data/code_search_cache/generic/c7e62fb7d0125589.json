@@ -1,0 +1,46 @@
+{
+  "api_patterns": [
+    "import numpy as np\nimport pandas as pd\nimport matplotlib\nmatplotlib.use(\"Agg\")\nimport matplotlib.pyplot as plt",
+    "from collections import Counter, defaultdict\ncat_features = defaultdict(Counter)\nfor row in records:\n    group = classify(row[\"label\"])\n    cat_features[group].update(row[\"features\"])",
+    "def load_table(path):\n    df = pd.read_csv(path)\n    df = df.dropna(subset=[\"outcome\"])\n    return df",
+    "X = df[feature_cols].to_numpy(dtype=float)\ny = df[outcome_col].to_numpy()\nsummary = pd.DataFrame({\"feature\": feature_cols, \"mean\": X.mean(axis=0)})",
+    "plt.figure(figsize=(6, 4))\nplt.bar(result_df[\"name\"], result_df[\"score\"])\nplt.xticks(rotation=45, ha=\"right\")\nplt.tight_layout()\nplt.savefig(\"outputs/module_scores.png\", dpi=300)"
+  ],
+  "file_structure": {
+    "config.py": "stores feature names, outcome names, paths, model settings, and output directories",
+    "data_loading.py": "loads cohort, metabolomics, phenotype, and covariate tables into pandas DataFrames",
+    "preprocessing.py": "handles missing values, scaling, feature selection, and conversion to numpy arrays",
+    "module_analysis.py": "constructs metabolite modules and computes module-level summary scores",
+    "single_metabolite_analysis.py": "runs comparison models using individual metabolites",
+    "evaluation.py": "computes prediction stability, effect estimates, confidence intervals, and summary tables",
+    "visualization.py": "generates matplotlib figures for model comparison and stability results",
+    "main.py": "orchestrates the full experiment from data loading to result export",
+    "app.py": "optional interface or reporting entry point for loading trained outputs and visualizing predictions"
+  },
+  "evaluation_patterns": [
+    "results = []\nfor name, X in feature_sets.items():\n    score = evaluate_model(X, y)\n    results.append({\"feature_set\": name, \"score\": score})\nresult_df = pd.DataFrame(results)",
+    "boot_scores = []\nfor i in range(n_bootstrap):\n    idx = np.random.choice(len(y), len(y), replace=True)\n    boot_scores.append(metric_fn(y[idx], pred[idx]))\nci = np.percentile boot_scores, [2.5, 97.5])",
+    "summary = result_df.groupby(\"feature_set\")[\"score\"].agg([\"mean\", \"std\", \"count\"]).reset_index()",
+    "result_df.to_csv(\"outputs/model_comparison.csv\", index=False)\nsummary.to_csv(\"outputs/stability_summary.csv\", index=False)",
+    "print(\"[Experiment] Module model score:\", module_score)\nprint(\"[Experiment] Single metabolite model score:\", metabolite_score)"
+  ],
+  "library_versions": {
+    "numpy": ">=1.24",
+    "scipy": ">=1.10",
+    "matplotlib": ">=3.7",
+    "pandas": ">=2.0"
+  },
+  "repos": [],
+  "queries": [
+    "metabolomics T2D pandas numpy",
+    "metabolic modules diabetes python",
+    "WGCNA metabolomics python scipy",
+    "comorbidity burden pandas matplotlib",
+    "obesity diabetes metabolomics analysis",
+    "scientific computing python",
+    "computational experiment"
+  ],
+  "_cached_at": 1778405151.921897,
+  "_domain_id": "generic",
+  "_topic_hash": "c7e62fb7d0125589"
+}

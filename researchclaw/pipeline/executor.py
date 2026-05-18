@@ -103,7 +103,13 @@ from researchclaw.pipeline.stage_impls._literature import (  # noqa: E402
     _execute_literature_collect,
     _execute_literature_screen,
     _execute_knowledge_extract,
+    _build_biomedical_default_search_queries,
     _expand_search_queries,
+    _extract_year_min_from_plan,
+    _extract_queries_from_plan,
+    _is_biomedical_grant_context,
+    _passes_topic_prefilter,
+    _score_candidate_for_topic,
 )
 
 # ---------------------------------------------------------------------------

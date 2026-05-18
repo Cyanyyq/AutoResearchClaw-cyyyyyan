@@ -139,6 +139,7 @@ class ResearchConfig:
     daily_paper_count: int = 0
     quality_threshold: float = 0.0
     graceful_degradation: bool = True
+    biomedical_query_limit: int = 8
 
 
 @dataclass(frozen=True)
@@ -782,6 +783,9 @@ class RCConfig:
                 daily_paper_count=int(research.get("daily_paper_count", 0)),
                 quality_threshold=float(research.get("quality_threshold", 0.0)),
                 graceful_degradation=bool(research.get("graceful_degradation", True)),
+                biomedical_query_limit=max(
+                    1, _safe_int(research.get("biomedical_query_limit"), 8)
+                ),
             ),
             runtime=RuntimeConfig(
                 timezone=runtime["timezone"],

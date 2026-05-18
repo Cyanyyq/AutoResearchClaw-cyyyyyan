@@ -1,0 +1,45 @@
+{
+  "api_patterns": [
+    "import pandas as pd\nfrom pathlib import Path\n\ndata_path = Path(\"data\") / \"cohort.csv\"\ndf = pd.read_csv(data_path)\ndf = df.dropna(subset=[\"t2d_event\", \"waist_circumference\"])",
+    "import numpy as np\n\ndef sigmoid(x: np.ndarray) -> np.ndarray:\n    return 1.0 / (1.0 + np.exp(-x))\n\nrisk_score = sigmoid(model_linear_predictor)",
+    "import pandas as pd\n\nmetabolite_cols = [c for c in df.columns if c.startswith(\"met_\")]\nX_met = df[metabolite_cols].apply(pd.to_numeric, errors=\"coerce\")\nX_met = X_met.fillna(X_met.median())",
+    "from scipy import stats\n\nrho, p_value = stats.spearmanr(df[\"metabolite_x\"], df[\"t2d_risk_score\"], nan_policy=\"omit\")\nresult = {\"feature\": \"metabolite_x\", \"spearman_rho\": rho, \"p_value\": p_value}",
+    "import matplotlib.pyplot as plt\n\nfig, ax = plt.subplots(figsize=(5, 4))\nax.scatter(df[\"baseline_risk\"], df[\"metabolomics_risk\"], alpha=0.5)\nax.set_xlabel(\"Clinical risk\")\nax.set_ylabel(\"Clinical + metabolomics risk\")\nfig.tight_layout()"
+  ],
+  "file_structure": {
+    "data_loading.py": "Load cohort, metabolomics, covariate, and outcome tables from CSV or parquet files.",
+    "preprocess.py": "Clean missing values, encode categorical covariates, standardize metabolites, and define central obesity subgroup.",
+    "features.py": "Create clinical-only and clinical-plus-metabolomics feature matrices.",
+    "models.py": "Fit risk prediction models and save trained estimators.",
+    "evaluate.py": "Compute discrimination, calibration, reclassification, and subgroup metrics.",
+    "plot_results.py": "Generate publication-ready figures for risk distributions, ROC curves, calibration, and metabolite associations.",
+    "config.py": "Store paths, feature column names, outcome definitions, and random seeds."
+  },
+  "evaluation_patterns": [
+    "from sklearn.metrics import roc_auc_score\n\nauc_clinical = roc_auc_score(y_true, pred_clinical)\nauc_met = roc_auc_score(y_true, pred_metabolomics)\nauc_gain = auc_met - auc_clinical\nprint({\"auc_clinical\": auc_clinical, \"auc_metabolomics\": auc_met, \"auc_gain\": auc_gain})",
+    "import pandas as pd\n\nsummary = pd.DataFrame({\n    \"model\": [\"clinical\", \"clinical_metabolomics\"],\n    \"auc\": [auc_clinical, auc_met],\n    \"brier\": [brier_clinical, brier_met]\n})\nsummary.to_csv(\"results/model_performance.csv\", index=False)",
+    "from scipy import stats\n\nstat, p_value = stats.ttest_rel(pred_metabolomics, pred_clinical)\nreport = {\"mean_risk_delta\": float((pred_metabolomics - pred_clinical).mean()), \"p_value\": float(p_value)}",
+    "import matplotlib.pyplot as plt\n\nfig, ax = plt.subplots(figsize=(4, 4))\nax.bar([\"Clinical\", \"Clinical + Metabolomics\"], [auc_clinical, auc_met])\nax.set_ylabel(\"AUC\")\nfig.savefig(\"results/auc_comparison.png\", dpi=300)"
+  ],
+  "library_versions": {
+    "numpy": ">=1.26,<3",
+    "scipy": ">=1.11,<2",
+    "matplotlib": ">=3.7,<4",
+    "pandas": ">=2.1,<3",
+    "scikit-learn": ">=1.3,<2",
+    "statsmodels": ">=0.14,<1"
+  },
+  "repos": [],
+  "queries": [
+    "central obesity diabetes metabolomics python",
+    "metabolomics diabetes risk pandas",
+    "pandas scipy metabolomics analysis",
+    "numpy scipy biomarker risk model",
+    "pandas matplotlib metabolomics plots",
+    "scientific computing python",
+    "computational experiment"
+  ],
+  "_cached_at": 1778412543.212051,
+  "_domain_id": "generic",
+  "_topic_hash": "a48d34c0b9973e65"
+}

@@ -6,8 +6,9 @@ Public API
 ----------
 - ``search_semantic_scholar(query, limit, year_min)`` → ``list[Paper]``
 
-Rate limit: 1 req/s (free, no API key).  Retries up to 3 times with
-exponential back-off on transient failures.
+Rate limit: unauthenticated requests share a public pool and may be throttled.
+Authenticated requests use the official introductory 1 RPS limit. Retries up
+to 3 times with exponential back-off on transient failures.
 
 Circuit breaker has three states:
   CLOSED → normal operation
@@ -19,12 +20,15 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import random
+import ssl
 import threading
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from pathlib import Path
 from typing import Any
 
 from researchclaw.literature.models import Author, Paper
@@ -34,7 +38,8 @@ logger = logging.getLogger(__name__)
 _BASE_URL = "https://api.semanticscholar.org/graph/v1/paper/search"
 _FIELDS = "paperId,title,abstract,year,venue,citationCount,authors,externalIds,url"
 _MAX_PER_REQUEST = 100
-_RATE_LIMIT_SEC = 1.5  # conservative spacing between requests
+_RATE_LIMIT_SEC = 1.5  # conservative spacing between anonymous requests
+_AUTH_RATE_LIMIT_SEC = 1.1  # official introductory API key limit is 1 RPS
 _MAX_RETRIES = 3
 _MAX_WAIT_SEC = 60
 _TIMEOUT_SEC = 30
@@ -163,7 +168,8 @@ def search_semantic_scholar(
     year_min:
         If >0, restrict to papers published in this year or later.
     api_key:
-        Optional S2 API key (raises rate limit to 10 req/s).
+        Optional S2 API key. If empty, reads SEMANTIC_SCHOLAR_API_KEY or
+        S2_API_KEY from the environment.
 
     Returns
     -------
@@ -171,11 +177,16 @@ def search_semantic_scholar(
         Parsed papers.  Empty list on network failure.
     """
     global _last_request_time  # noqa: PLW0603
+    api_key = (
+        api_key
+        or os.getenv("SEMANTIC_SCHOLAR_API_KEY", "")
+        or os.getenv("S2_API_KEY", "")
+    ).strip()
 
     # Rate limiting: locked to serialize concurrent callers
     with _rate_lock:
         now = time.monotonic()
-        rate_limit = 0.3 if api_key else _RATE_LIMIT_SEC
+        rate_limit = _AUTH_RATE_LIMIT_SEC if api_key else _RATE_LIMIT_SEC
         elapsed_since_last = now - _last_request_time
         if elapsed_since_last < rate_limit:
             time.sleep(rate_limit - elapsed_since_last)
@@ -228,7 +239,7 @@ def _request_with_retry(
     for attempt in range(_MAX_RETRIES):
         try:
             req = urllib.request.Request(url, headers=headers)
-            with urllib.request.urlopen(req, timeout=_TIMEOUT_SEC) as resp:
+            with _urlopen(req) as resp:
                 body = resp.read().decode("utf-8")
                 _cb_on_success()
                 return json.loads(body)
@@ -236,7 +247,12 @@ def _request_with_retry(
             if exc.code == 429:
                 if _cb_on_429():
                     return None  # breaker tripped
-                delay = min(2 ** (attempt + 1), _MAX_WAIT_SEC)
+                retry_after = exc.headers.get("Retry-After") if exc.headers else None
+                try:
+                    retry_after_sec = float(retry_after) if retry_after else 0.0
+                except ValueError:
+                    retry_after_sec = 0.0
+                delay = max(retry_after_sec, min(2 ** (attempt + 1), _MAX_WAIT_SEC))
                 jitter = random.uniform(0, delay * 0.3)
                 wait = delay + jitter
                 logger.warning(
@@ -281,12 +297,17 @@ def batch_fetch_papers(
     """
     if not paper_ids:
         return []
+    api_key = (
+        api_key
+        or os.getenv("SEMANTIC_SCHOLAR_API_KEY", "")
+        or os.getenv("S2_API_KEY", "")
+    ).strip()
 
     if not _cb_should_allow():
         return []
 
     global _last_request_time  # noqa: PLW0603
-    rate = 0.3 if api_key else _RATE_LIMIT_SEC
+    rate = _AUTH_RATE_LIMIT_SEC if api_key else _RATE_LIMIT_SEC
     with _rate_lock:
         now = time.monotonic()
         elapsed = now - _last_request_time
@@ -345,7 +366,7 @@ def _post_with_retry(
     for attempt in range(_MAX_RETRIES):
         try:
             req = urllib.request.Request(url, data=body, headers=headers, method="POST")
-            with urllib.request.urlopen(req, timeout=_TIMEOUT_SEC) as resp:
+            with _urlopen(req) as resp:
                 data = json.loads(resp.read().decode("utf-8"))
                 _cb_on_success()
                 return data if isinstance(data, list) else None
@@ -353,7 +374,12 @@ def _post_with_retry(
             if exc.code == 429:
                 if _cb_on_429():
                     return None
-                delay = min(2 ** (attempt + 1), _MAX_WAIT_SEC)
+                retry_after = exc.headers.get("Retry-After") if exc.headers else None
+                try:
+                    retry_after_sec = float(retry_after) if retry_after else 0.0
+                except ValueError:
+                    retry_after_sec = 0.0
+                delay = max(retry_after_sec, min(2 ** (attempt + 1), _MAX_WAIT_SEC))
                 jitter = random.uniform(0, delay * 0.3)
                 logger.warning(
                     "S2 batch rate-limited (429). Waiting %.1fs (attempt %d/%d)...",
@@ -378,6 +404,46 @@ def _post_with_retry(
             time.sleep(wait + jitter)
 
     logger.error("S2 batch request exhausted retries")
+    return None
+
+
+def _urlopen(request: urllib.request.Request) -> Any:
+    try:
+        return urllib.request.urlopen(request, timeout=_TIMEOUT_SEC)  # noqa: S310
+    except urllib.error.URLError as exc:
+        if not _is_certificate_error(exc):
+            raise
+        ca_bundle = _ca_bundle_path()
+        if ca_bundle is None:
+            raise
+        context = ssl.create_default_context(cafile=str(ca_bundle))
+        return urllib.request.urlopen(  # noqa: S310
+            request,
+            timeout=_TIMEOUT_SEC,
+            context=context,
+        )
+
+
+def _is_certificate_error(exc: urllib.error.URLError) -> bool:
+    reason = getattr(exc, "reason", None)
+    return isinstance(reason, ssl.SSLCertVerificationError) or (
+        "CERTIFICATE_VERIFY_FAILED" in str(exc)
+    )
+
+
+def _ca_bundle_path() -> Path | None:
+    candidates = [
+        os.environ.get("SSL_CERT_FILE", ""),
+        ssl.get_default_verify_paths().cafile or "",
+        ssl.get_default_verify_paths().openssl_cafile or "",
+        "/etc/ssl/cert.pem",
+        "/etc/ssl/certs/ca-certificates.crt",
+        "/opt/homebrew/etc/openssl@3/cert.pem",
+        "/usr/local/etc/openssl@3/cert.pem",
+    ]
+    for candidate in candidates:
+        if candidate and Path(candidate).is_file():
+            return Path(candidate)
     return None
 
 

@@ -112,6 +112,15 @@ def test_validate_config_with_valid_data_returns_ok_true(tmp_path: Path):
     assert result.errors == ()
 
 
+def test_research_biomedical_query_limit_parses_from_config(tmp_path: Path):
+    data = _valid_config_data()
+    data["research"]["biomedical_query_limit"] = 12
+
+    config = RCConfig.from_dict(data, project_root=tmp_path, check_paths=False)
+
+    assert config.research.biomedical_query_limit == 12
+
+
 def test_validate_config_missing_required_fields_returns_errors(tmp_path: Path):
     data = _valid_config_data()
     data["research"] = {}

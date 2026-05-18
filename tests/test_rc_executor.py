@@ -1,6 +1,7 @@
 # pyright: reportPrivateUsage=false, reportUnknownParameterType=false, reportMissingParameterType=false, reportUnknownMemberType=false, reportUnknownArgumentType=false, reportUnknownVariableType=false, reportUnusedCallResult=false, reportAttributeAccessIssue=false, reportUnknownLambdaType=false
 from __future__ import annotations
 
+from dataclasses import replace
 import json
 import re
 import sys
@@ -1890,6 +1891,186 @@ class TestExpandSearchQueries:
         has_benchmark = any("benchmark" in q.lower() for q in result)
         assert has_survey
         assert has_benchmark
+
+    def test_extracts_merged_queries_for_biomedical_plan(self) -> None:
+        plan = {
+            "merged_queries": {
+                "pubmed": [
+                    "((UK Biobank) AND (NMR metabolomics OR metabolomic*) AND (2023:2026[pdat]))"
+                ],
+                "openalex": [
+                    "cardiometabolic multimorbidity metabolomics risk prediction UK Biobank"
+                ],
+            }
+        }
+        result = rc_executor._extract_queries_from_plan(plan)
+        assert any("UK Biobank" in q for q in result)
+        assert any("cardiometabolic multimorbidity" in q for q in result)
+
+    def test_biomedical_expansion_avoids_benchmark_variants(self) -> None:
+        queries = ["UK Biobank NMR metabolomics"]
+        topic = (
+            "深圳基金 UK Biobank NMR metabolomics CKM syndrome "
+            "cardiometabolic multimorbidity"
+        )
+        result = rc_executor._expand_search_queries(
+            queries,
+            topic,
+            biomedical_context=True,
+        )
+        lowered = " ".join(result).lower()
+        assert "benchmark" not in lowered
+        assert "deep learning" not in lowered
+        assert any(
+            "ckm" in q.lower() or "cardiovascular kidney metabolic" in q.lower()
+            for q in result
+        )
+
+    def test_biomedical_default_queries_work_for_chinese_topic(self) -> None:
+        result = rc_executor._build_biomedical_default_search_queries(
+            "深圳基金 心肾代谢 多病共存 代谢组 糖尿病 肾病"
+        )
+        assert any("cardiometabolic multimorbidity" in q for q in result)
+        assert any(
+            "ckm syndrome" in q.lower()
+            or "cardiovascular kidney metabolic" in q.lower()
+            for q in result
+        )
+
+    def test_biomedical_default_query_limit_is_configurable(self) -> None:
+        topic = (
+            "UK Biobank NMR metabolomics cardiometabolic multimorbidity "
+            "CKM syndrome type 2 diabetes cardiovascular kidney disease"
+        )
+        default_queries = rc_executor._build_biomedical_default_search_queries(topic)
+        expanded_queries = rc_executor._build_biomedical_default_search_queries(
+            topic,
+            limit=12,
+        )
+        assert len(default_queries) == 8
+        assert 8 < len(expanded_queries) <= 12
+
+    def test_detects_biomedical_grant_context_from_chinese_topic(self) -> None:
+        assert rc_executor._is_biomedical_grant_context(
+            "深圳市基础研究面上项目：UKB 代谢组与心肾代谢疾病",
+            ["epidemiology"],
+        )
+
+    def test_biomedical_context_short_markers_need_token_boundaries(self) -> None:
+        assert rc_executor._is_biomedical_grant_context(
+            "UKB NMR metabolomics for CMM and CKD risk prediction",
+            ["epidemiology"],
+        )
+        assert not rc_executor._is_biomedical_grant_context(
+            "A CMMODEL benchmark for graph learning",
+            ["machine-learning"],
+        )
+        assert not rc_executor._is_biomedical_grant_context(
+            "深圳市基础研究面上项目：大语言模型推理算法 benchmark",
+            ["machine-learning"],
+        )
+
+    def test_extract_year_min_from_filters_and_scope(self) -> None:
+        assert rc_executor._extract_year_min_from_plan(
+            {"filters": {"min_year": "2022"}},
+            default=2020,
+        ) == 2022
+        assert rc_executor._extract_year_min_from_plan(
+            {"search_scope": {"years": "2021-2026"}},
+            default=2020,
+        ) == 2021
+        assert rc_executor._extract_year_min_from_plan(
+            {"filters": {"min_year": "bad"}},
+            default=2023,
+        ) == 2023
+
+    def test_biomedical_candidate_score_prioritizes_domain_signal(self) -> None:
+        topic_keywords = ["ukb", "nmr", "metabolomics", "diabetes", "ckm"]
+        direct = {
+            "title": "Metabolomic profiles predict outcomes in UK Biobank",
+            "abstract": "NMR metabolomics for type 2 diabetes and CKM risk.",
+            "keyword_overlap": 1,
+            "citation_count": 20,
+        }
+        generic = {
+            "title": "General medical question answering benchmark",
+            "abstract": "A diabetes keyword appears once in a model benchmark.",
+            "keyword_overlap": 1,
+            "citation_count": 2000,
+        }
+        assert rc_executor._score_candidate_for_topic(
+            direct,
+            topic_keywords,
+            biomedical_context=True,
+        ) > rc_executor._score_candidate_for_topic(
+            generic,
+            topic_keywords,
+            biomedical_context=True,
+        )
+
+    def test_biomedical_literature_screen_drops_single_token_noise(
+        self,
+        tmp_path: Path,
+        run_dir: Path,
+        rc_config: RCConfig,
+        adapters: AdapterBundle,
+    ) -> None:
+        bio_config = replace(
+            rc_config,
+            research=replace(
+                rc_config.research,
+                topic=(
+                    "UKB NMR metabolomics type 2 diabetes CKM risk prediction"
+                ),
+                domains=("epidemiology", "metabolomics"),
+            ),
+        )
+        rows = [
+            {
+                "title": "UKB file parser benchmark for workflow orchestration",
+                "abstract": "Systems benchmark with reproducible pipelines.",
+                "citation_count": 5000,
+            },
+            {
+                "title": (
+                    "Metabolomic profiles predict multidisease outcomes in "
+                    "UK Biobank"
+                ),
+                "abstract": (
+                    "NMR metabolomics type 2 diabetes CKM chronic kidney "
+                    "disease cardiometabolic multimorbidity."
+                ),
+                "citation_count": 20,
+            },
+        ]
+        _write_prior_artifact(
+            run_dir,
+            4,
+            "candidates.jsonl",
+            "\n".join(json.dumps(row) for row in rows),
+        )
+        stage_dir = tmp_path / "stage-05"
+        stage_dir.mkdir()
+
+        result = rc_executor._execute_literature_screen(
+            stage_dir,
+            run_dir,
+            bio_config,
+            adapters,
+            llm=None,
+        )
+
+        assert result.status == StageStatus.DONE
+        shortlist = [
+            json.loads(line)
+            for line in (stage_dir / "shortlist.jsonl").read_text(
+                encoding="utf-8"
+            ).splitlines()
+            if line.strip()
+        ]
+        titles = [row["title"] for row in shortlist]
+        assert titles[0].startswith("Metabolomic profiles")
+        assert not any("file parser benchmark" in title for title in titles)
 
 
 # ── R4-1: Experiment Budget Guard Tests ──────────────────────────────

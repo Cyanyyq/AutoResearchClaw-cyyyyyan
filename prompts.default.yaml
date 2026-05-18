@@ -170,7 +170,8 @@ stages:
       {plan_text}'
   literature_screen:
     json_mode: true
-    system: You are a strict domain-aware reviewer. Reject off-topic papers aggressively.
+    system: You are a strict domain-aware reviewer with zero tolerance for cross-domain false positives. Reject off-topic
+      papers aggressively, even when they share superficial keywords.
     user: 'Perform merged relevance+quality screening and return shortlist.
 
       Return JSON: {shortlist:[...]} each with title, cite_key (if present), relevance_score (0-1), quality_score (0-1), keep_reason.
@@ -183,8 +184,19 @@ stages:
 
       Threshold: {quality_threshold}
 
-      IMPORTANT: Only keep papers genuinely relevant to the topic above. Reject papers about unrelated domains even if they
-      are high quality.
+      SCREENING RULES (apply strictly):
+
+      1. DOMAIN MATCH: The paper''s actual research domain must match the topic''s domain. Shared keywords across domains
+      do NOT count.
+
+      2. METHOD RELEVANCE: The paper must discuss methods, cohorts, datasets, endpoints, biomarkers, prediction metrics,
+      validation designs, or findings directly applicable to the research topic.
+
+      3. CROSS-DOMAIN REJECTION: Reject papers from unrelated fields even if they use similar terminology.
+
+      4. RECENCY PREFERENCE: Prefer papers from 2020+ for methodology, but accept foundational papers if still central.
+
+      5. QUALITY FLOOR: Reject papers with no abstract, no venue, and no citation count.
 
       Candidates JSONL:
 
@@ -381,14 +393,18 @@ stages:
       {context}'
   search_strategy:
     json_mode: true
-    system: You design literature retrieval strategies and source verification plans. You aim for COMPREHENSIVE coverage — a good research paper needs 30-60 references.
+    system: You design literature retrieval strategies and source verification plans.
     user: 'Create a merged search strategy package.
 
       Return a JSON object with keys: search_plan_yaml, sources.
 
-      search_plan_yaml must be valid YAML text with search_strategies containing at least 3 strategies,
-      each with 3-5 diverse keyword queries (short, 3-6 words each). Generate at least 8 total queries.
-      Cover: core topic, related methods, benchmarks/datasets, theoretical foundations, applications.
+      search_plan_yaml must be valid YAML text.
+
+      The YAML MUST include top-level search_strategies, each containing a queries list. Stage 4 reads search_strategies[*].queries directly; if you also include merged_queries or database-specific queries, duplicate the best executable queries into search_strategies.
+
+      For biomedical or grant-proposal topics, prefer PubMed/OpenAlex-friendly English keyword queries covering cohorts,
+      exposures, outcomes, biomarkers, risk prediction, validation, and recency. Do not add generic ML terms such as benchmark,
+      SOTA, or deep learning unless the topic explicitly requires them.
 
       sources must include id,name,type,url,status,query,verified_at.
 
@@ -409,7 +425,7 @@ stages:
 
       {cards_context}'
   topic_init:
-    system: You are a rigorous research planner.
+    system: You are a rigorous research planner who identifies novel, timely research angles.
     user: 'Create a SMART research goal in markdown.
 
       Topic: {topic}
@@ -420,7 +436,18 @@ stages:
 
       Quality threshold: {quality_threshold}
 
-      Required sections: Topic, Scope, SMART Goal, Constraints, Success Criteria, Generated.'
+      Required sections: Topic, Novel Angle, Scope, SMART Goal, Constraints, Success Criteria, Generated.
+
+      TREND VALIDATION (MANDATORY):
+
+      - Describe the research trend or gap that motivates this work. Do NOT fabricate specific paper titles or citations.
+
+      - Name the specific benchmark, dataset, cohort, registry, or data resource that will be used for evaluation.
+
+      - For biomedical, epidemiology, clinical, or grant-proposal topics, use cohort outcomes, external validation,
+      calibration, effect sizes, and public-health value instead of SOTA/leaderboard language.
+
+      - Add a Benchmark/Data Resource subsection listing: name, source, and typical metrics.'
 sub_prompts:
   code_repair:
     system: You fix Python code validation errors while preserving functionality.

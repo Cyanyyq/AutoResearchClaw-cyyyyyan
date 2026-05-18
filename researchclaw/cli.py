@@ -345,6 +345,15 @@ def cmd_run(args: argparse.Namespace) -> int:
                 scripted = ScriptedHITLAdapter.from_file(interventions_file)
                 hitl_session.set_input_callback(scripted.collect_input)
                 print(f"  HITL:    scripted ({len(scripted.pending_stages)} interventions)")
+            elif os.environ.get("RESEARCHCLAW_HITL_FILE_WAIT", "").lower() in (
+                "1",
+                "true",
+                "yes",
+            ):
+                print(
+                    "  HITL:    file-wait "
+                    "(use 'researchclaw attach/status/approve/reject')"
+                )
             else:
                 # Wire CLI adapter for interactive input
                 from researchclaw.hitl.adapters.cli_adapter import CLIAdapter

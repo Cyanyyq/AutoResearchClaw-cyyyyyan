@@ -29,14 +29,14 @@ Activate this skill when the user:
    ```bash
    cp config.researchclaw.example.yaml config.yaml
    ```
-3. Ensure the user's LLM API key is configured in `config.yaml` under `llm.api_key` or via `llm.api_key_env` environment variable.
+3. Ensure the user's LLM API key is provided through `llm.api_key_env` and an environment variable. Do not store real API keys in `config.yaml`.
 
 ### Running the Pipeline
 
 **Option A: CLI (recommended)**
 
 ```bash
-researchclaw run --topic "Your research topic here" --auto-approve
+researchclaw run --topic "Your research topic here"
 ```
 
 Options:
@@ -44,7 +44,7 @@ Options:
 - `--config` / `-c`: Config file path (default: `config.yaml`)
 - `--output` / `-o`: Output directory (default: `artifacts/rc-YYYYMMDD-HHMMSS-HASH/`)
 - `--from-stage`: Resume from a specific stage (e.g., `PAPER_OUTLINE`)
-- `--auto-approve`: Auto-approve gate stages (5, 9, 20) without human input
+- `--auto-approve`: Auto-approve gate stages (5, 9, 20) without human input. Use only for trusted, already-reviewed configs, especially when `experiment.mode` can execute local or remote code.
 
 **Option B: Python API**
 
@@ -121,7 +121,7 @@ artifacts/<run-id>/
 - **Config validation error**: Run `researchclaw validate --config config.yaml`
 - **LLM connection failure**: Check `llm.base_url` and API key
 - **Sandbox execution failure**: Verify `experiment.sandbox.python_path` exists and has numpy installed
-- **Gate rejection**: Use `--auto-approve` or manually approve at stages 5, 9, 20
+- **Gate rejection**: Manually approve at stages 5, 9, 20. Use `--auto-approve` only for trusted, already-reviewed configs.
 
 ## Tools Required
 

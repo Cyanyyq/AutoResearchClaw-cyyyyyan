@@ -37,8 +37,255 @@ logger = logging.getLogger(__name__)
 # Local helpers
 # ---------------------------------------------------------------------------
 
+_SEARCH_STOP_WORDS = {
+    "a", "an", "the", "of", "for", "in", "on", "and", "or", "with",
+    "to", "by", "from", "its", "is", "are", "was", "be", "as", "at",
+    "via", "using", "based", "study", "analysis", "empirical",
+    "towards", "toward", "into", "exploring", "comparison", "tasks",
+    "effectiveness", "investigation", "comprehensive", "novel",
+    "challenge", "challenges", "gaps", "gap", "critical", "survey", "review",
+    "ts", "py", "pdat", "all", "project", "research",
+}
 
-def _expand_search_queries(queries: list[str], topic: str) -> list[str]:
+_BIOMEDICAL_CONTEXT_MARKERS = {
+    "biomed", "biomedical", "medicine", "medical", "clinical", "epidemiology",
+    "cohort", "pubmed", "metabolomics", "metabolomic", "diabetes",
+    "cardiovascular", "kidney", "ckd", "ckm", "cmm", "cvd", "t2d",
+    "multimorbidity", "biobank", "uk biobank", "ukb", "nmr",
+    "队列", "流行病", "代谢组", "心肾代谢", "糖尿病", "心血管",
+    "肾病", "多病共存", "人群",
+}
+_BIOMEDICAL_DEFAULT_QUERY_LIMIT = 8
+
+_BIOMEDICAL_QUERY_PHRASES = (
+    "UK Biobank NMR metabolomics",
+    "cardiometabolic multimorbidity metabolomics",
+    "cardiovascular kidney metabolic syndrome",
+    "CKM syndrome metabolomics cohort",
+    "NMR metabolomics type 2 diabetes",
+    "NMR metabolomics cardiovascular disease",
+    "NMR metabolomics chronic kidney disease",
+    "metabolomic signatures prospective cohort",
+    "metabolomic risk score cardiometabolic",
+    "Nightingale NMR metabolomics disease atlas",
+)
+
+_BIOMEDICAL_HIGH_SIGNAL_PHRASES = (
+    "uk biobank", "nightingale", "nmr", "metabolomics", "metabolomic",
+    "cardiometabolic", "multimorbidity", "ckm", "cardiovascular-kidney",
+    "cardiovascular kidney", "chronic kidney", "ckd", "type 2 diabetes",
+    "diabetes", "cardiovascular disease", "coronary heart disease", "stroke",
+    "prospective cohort", "risk prediction", "metabolic signature",
+    "metabolomic signature", "glyca", "lipoprotein", "residual risk",
+)
+
+
+def _extract_search_terms(text: str) -> list[str]:
+    """Extract ASCII search terms from *text* after removing common noise."""
+    return [
+        w for w in re.split(r"[^a-zA-Z0-9]+", text)
+        if w.lower() not in _SEARCH_STOP_WORDS and len(w) > 1
+    ]
+
+
+def _is_biomedical_grant_context(
+    topic: str, domains: tuple[str, ...] | list[str] = ()
+) -> bool:
+    """Return True for biomedical or epidemiology grant topics."""
+    haystack = f"{topic} {' '.join(domains)}".lower()
+    return any(
+        _context_marker_matches(haystack, marker)
+        for marker in _BIOMEDICAL_CONTEXT_MARKERS
+    )
+
+
+def _context_marker_matches(haystack: str, marker: str) -> bool:
+    """Match short English markers as tokens while keeping Chinese substring matching."""
+    marker = marker.lower()
+    if re.fullmatch(r"[a-z0-9]+", marker):
+        pattern = rf"(?<![a-z0-9]){re.escape(marker)}(?![a-z0-9])"
+        return re.search(pattern, haystack) is not None
+    if re.fullmatch(r"[a-z0-9][a-z0-9 ]+[a-z0-9]", marker):
+        pattern = re.escape(marker).replace(r"\ ", r"\s+")
+        return (
+            re.search(rf"(?<![a-z0-9]){pattern}(?![a-z0-9])", haystack)
+            is not None
+        )
+    return marker in haystack
+
+
+def _add_unique_query(out: list[str], seen: set[str], query: str) -> None:
+    query = re.sub(r"\s+", " ", query).strip()
+    if not query:
+        return
+    key = query.lower()
+    if key not in seen:
+        seen.add(key)
+        out.append(query)
+
+
+def _collect_query_strings(value: Any) -> list[str]:
+    """Collect strings from a query-specific YAML/JSON subtree."""
+    queries: list[str] = []
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, list):
+        for item in value:
+            queries.extend(_collect_query_strings(item))
+        return queries
+    if isinstance(value, dict):
+        for item in value.values():
+            queries.extend(_collect_query_strings(item))
+    return queries
+
+
+def _extract_queries_from_plan(plan: dict[str, Any]) -> list[str]:
+    """Extract Stage 4 search queries from common plan schemas.
+
+    Earlier versions only read ``search_strategies[*].queries`` and top-level
+    ``queries``. Biomedical grant planning prompts often group high-quality
+    database strings under ``merged_queries`` or ``*_queries``. This helper
+    accepts both shapes so good PubMed/OpenAlex-style queries are not lost.
+    """
+    raw_queries: list[str] = []
+
+    strategies = (
+        plan.get("search_strategies")
+        or plan.get("search_phases")
+        or plan.get("phases")
+        or []
+    )
+    if isinstance(strategies, list):
+        for strat in strategies:
+            if isinstance(strat, dict):
+                raw_queries.extend(_collect_query_strings(strat.get("queries", [])))
+
+    for key in (
+        "queries",
+        "search_queries",
+        "database_queries",
+        "merged_queries",
+        "queries_by_source",
+        "pubmed_queries",
+        "openalex_queries",
+        "semantic_scholar_queries",
+        "scholar_queries",
+    ):
+        if key in plan:
+            raw_queries.extend(_collect_query_strings(plan.get(key)))
+
+    seen: set[str] = set()
+    unique: list[str] = []
+    for query in raw_queries:
+        _add_unique_query(unique, seen, query)
+    return unique
+
+
+def _extract_year_min_from_plan(plan: dict[str, Any], *, default: int = 2020) -> int:
+    """Extract a lower publication year from plan filters/search scope."""
+    filters = plan.get("filters", {})
+    if isinstance(filters, dict) and filters.get("min_year"):
+        try:
+            return int(filters["min_year"])
+        except (ValueError, TypeError):
+            pass
+    scope = plan.get("search_scope", {})
+    if isinstance(scope, dict) and scope.get("years"):
+        years = re.findall(r"\d{4}", str(scope["years"]))
+        if years:
+            return min(int(y) for y in years)
+    return default
+
+
+def _coerce_biomedical_query_limit(limit: int | None) -> int:
+    if limit is None:
+        return _BIOMEDICAL_DEFAULT_QUERY_LIMIT
+    try:
+        return max(1, int(limit))
+    except (TypeError, ValueError):
+        return _BIOMEDICAL_DEFAULT_QUERY_LIMIT
+
+
+def _build_biomedical_default_search_queries(
+    topic_text: str,
+    *,
+    limit: int | None = None,
+) -> list[str]:
+    """Generate stable biomedical queries from Chinese/English grant topics."""
+    query_limit = _coerce_biomedical_query_limit(limit)
+    lower = topic_text.lower()
+    queries: list[str] = []
+    seen: set[str] = set()
+
+    def has_any(*needles: str) -> bool:
+        return any(n.lower() in lower for n in needles)
+
+    if has_any("uk biobank", "ukb") and has_any("nmr", "metabolomics", "代谢组"):
+        _add_unique_query(queries, seen, "UK Biobank NMR metabolomics")
+    if has_any("多病共存", "multimorbidity", "cmm"):
+        _add_unique_query(queries, seen, "cardiometabolic multimorbidity metabolomics")
+        _add_unique_query(
+            queries,
+            seen,
+            "cardiometabolic multimorbidity risk prediction cohort",
+        )
+    if has_any("ckm", "心肾代谢", "cardiovascular-kidney-metabolic"):
+        _add_unique_query(queries, seen, "cardiovascular kidney metabolic syndrome cohort")
+        _add_unique_query(queries, seen, "CKM syndrome metabolomics cohort")
+    if has_any("糖尿病", "diabetes", "t2d"):
+        _add_unique_query(queries, seen, "NMR metabolomics type 2 diabetes UK Biobank")
+    if has_any("心血管", "cardiovascular", "stroke", "coronary"):
+        _add_unique_query(queries, seen, "NMR metabolomics cardiovascular disease UK Biobank")
+    if has_any("肾", "kidney", "ckd"):
+        _add_unique_query(queries, seen, "NMR metabolomics chronic kidney disease UK Biobank")
+
+    for query in _BIOMEDICAL_QUERY_PHRASES:
+        if len(queries) >= query_limit:
+            break
+        _add_unique_query(queries, seen, query)
+    return queries[:query_limit]
+
+
+def _score_candidate_for_topic(
+    row: dict[str, Any],
+    topic_keywords: list[str],
+    *,
+    biomedical_context: bool,
+) -> float:
+    """Cheap relevance score used before token-budget truncation."""
+    title = str(row.get("title", "")).lower()
+    abstract = str(row.get("abstract", "")).lower()
+    venue = str(row.get("venue", "")).lower()
+    text_blob = f"{title} {abstract} {venue}"
+    score = float(row.get("keyword_overlap", 0) or 0)
+    score += 0.25 * sum(1 for kw in topic_keywords if kw in text_blob)
+    if biomedical_context:
+        for phrase in _BIOMEDICAL_HIGH_SIGNAL_PHRASES:
+            if phrase in title:
+                score += 3.0
+            elif phrase in abstract:
+                score += 1.0
+    return score
+
+
+def _passes_topic_prefilter(
+    *,
+    overlap: int,
+    relevance_score: float,
+    biomedical_context: bool,
+) -> bool:
+    if biomedical_context:
+        return overlap >= 2 or relevance_score >= 3.0
+    return overlap >= 1
+
+
+def _expand_search_queries(
+    queries: list[str],
+    topic: str,
+    *,
+    biomedical_context: bool = False,
+    biomedical_query_limit: int | None = None,
+) -> list[str]:
     """Expand search queries for broader literature coverage.
 
     Generates additional queries by extracting key phrases from the topic
@@ -47,6 +294,14 @@ def _expand_search_queries(queries: list[str], topic: str) -> list[str]:
     """
     expanded = list(queries)  # keep originals
     seen = {q.lower().strip() for q in queries}
+
+    if biomedical_context:
+        for query in _build_biomedical_default_search_queries(
+            topic,
+            limit=biomedical_query_limit,
+        ):
+            _add_unique_query(expanded, seen, query)
+        return expanded
 
     # Extract key phrases from topic by splitting on common delimiters
     # e.g. "Comparing A, B, and C on X with Y" → ["A", "B", "C", "X", "Y"]
@@ -195,61 +450,18 @@ def _execute_search_strategy(
 
     # F1.5: Extract queries from plan for Stage 4 real literature search
     queries_list: list[str] = []
-    year_min = 2020
+    biomedical_context = _is_biomedical_grant_context(
+        topic, config.research.domains
+    )
+    biomedical_query_limit = config.research.biomedical_query_limit
+    year_min = 2023 if biomedical_context else 2020
     if isinstance(plan, dict):
-        strategies = (
-            plan.get("search_strategies")
-            or plan.get("search_phases")
-            or plan.get("phases")
-            or []
-        )
-        if isinstance(strategies, list):
-            for strat in strategies:
-                if isinstance(strat, dict):
-                    qs = strat.get("queries", [])
-                    if isinstance(qs, list):
-                        for q in qs:
-                            if isinstance(q, str) and q.strip():
-                                queries_list.append(q.strip())
-                            elif isinstance(q, dict):
-                                for v in q.values():
-                                    if isinstance(v, str) and v.strip():
-                                        queries_list.append(v.strip())
-        top_level_queries = plan.get("queries")
-        if isinstance(top_level_queries, list) and not queries_list:
-            for q in top_level_queries:
-                if isinstance(q, str) and q.strip():
-                    queries_list.append(q.strip())
-                elif isinstance(q, dict):
-                    for v in q.values():
-                        if isinstance(v, str) and v.strip():
-                            queries_list.append(v.strip())
-        filters = plan.get("filters", {})
-        if isinstance(filters, dict) and filters.get("min_year"):
-            try:
-                year_min = int(filters["min_year"])
-            except (ValueError, TypeError):
-                pass
+        queries_list = _extract_queries_from_plan(plan)
+        year_min = _extract_year_min_from_plan(plan, default=year_min)
 
     # --- Sanitize queries: shorten overly long queries ---
     # LLMs often produce the full topic title as a query, which is too long for
     # arXiv and Semantic Scholar (they work best with 3-8 keyword queries).
-    _stop = {
-        "a", "an", "the", "of", "for", "in", "on", "and", "or", "with",
-        "to", "by", "from", "its", "is", "are", "was", "be", "as", "at",
-        "via", "using", "based", "study", "analysis", "empirical",
-        "towards", "toward", "into", "exploring", "comparison", "tasks",
-        "effectiveness", "investigation", "comprehensive", "novel",
-        "challenge", "challenges", "gaps", "gap", "critical", "survey", "review",
-    }
-
-    def _extract_search_terms(text: str) -> list[str]:
-        """Extract meaningful search terms from text, removing stop words."""
-        return [
-            w for w in re.split(r"[^a-zA-Z0-9]+", text)
-            if w.lower() not in _stop and len(w) > 1
-        ]
-
     _MAX_QUERY_LEN = 60  # characters — beyond this, shorten to keywords
     _SEARCH_SUFFIXES = ["benchmark", "survey", "seminal", "state of the art"]
 
@@ -284,6 +496,11 @@ def _execute_search_strategy(
 
     def _build_default_search_queries(topic_text: str) -> list[str]:
         """Generate concept-style search queries from the topic instead of copying the title."""
+        if biomedical_context:
+            return _build_biomedical_default_search_queries(
+                topic_text,
+                limit=biomedical_query_limit,
+            )
         _words = _extract_search_terms(topic_text)
         if not _words:
             return [topic_text[:60]]
@@ -311,21 +528,27 @@ def _execute_search_strategy(
             _seen_q.add(q_lower)
             unique_queries.append(q.strip())
     # If we have fewer than 5 unique queries, generate supplemental keyword variants
-    if len(unique_queries) < 5 and len(_all_kw) >= 3:
-        supplements = [
-            " ".join(_all_kw[:4]) + " survey",
-            " ".join(_all_kw[:4]) + " benchmark",
-            " ".join(_all_kw[1:5]),  # shifted window for diversity
-            " ".join(_all_kw[:3]) + " comparison",
-            " ".join(_all_kw[:3]) + " deep learning",
-            " ".join(_all_kw[2:6]),  # another shifted window
-        ]
+    if len(unique_queries) < 5 and (biomedical_context or len(_all_kw) >= 3):
+        if biomedical_context:
+            supplements = _build_biomedical_default_search_queries(
+                topic,
+                limit=biomedical_query_limit,
+            )
+        else:
+            supplements = [
+                " ".join(_all_kw[:4]) + " survey",
+                " ".join(_all_kw[:4]) + " benchmark",
+                " ".join(_all_kw[1:5]),  # shifted window for diversity
+                " ".join(_all_kw[:3]) + " comparison",
+                " ".join(_all_kw[:3]) + " deep learning",
+                " ".join(_all_kw[2:6]),  # another shifted window
+            ]
         for s in supplements:
             s_lower = s.strip().lower()
             if s_lower not in _seen_q:
                 _seen_q.add(s_lower)
                 unique_queries.append(s.strip())
-            if len(unique_queries) >= 8:
+            if len(unique_queries) >= biomedical_query_limit:
                 break
     queries_list = unique_queries
     (stage_dir / "queries.json").write_text(
@@ -373,8 +596,16 @@ def _execute_literature_collect(
             papers_to_bibtex,
         )
 
-        # Expand queries for broader coverage
-        expanded_queries = _expand_search_queries(queries, config.research.topic)
+        # Expand queries for broader coverage. Biomedical/grant topics use
+        # cohort and disease-oriented variants instead of benchmark/survey noise.
+        expanded_queries = _expand_search_queries(
+            queries,
+            config.research.topic,
+            biomedical_context=_is_biomedical_grant_context(
+                config.research.topic, config.research.domains
+            ),
+            biomedical_query_limit=config.research.biomedical_query_limit,
+        )
         logger.info(
             "[literature] Searching %d queries (expanded from %d) "
             "across OpenAlex → S2 → arXiv…",
@@ -640,6 +871,9 @@ def _execute_literature_screen(
     topic_keywords = _extract_topic_keywords(
         config.research.topic, config.research.domains
     )
+    biomedical_context = _is_biomedical_grant_context(
+        config.research.topic, config.research.domains
+    )
     filtered_rows: list[dict[str, Any]] = []
     dropped_count = 0
     for raw_line in candidates_text.strip().splitlines():
@@ -650,17 +884,52 @@ def _execute_literature_screen(
         abstract = str(row.get("abstract", "")).lower()
         text_blob = f"{title} {abstract}"
         overlap = sum(1 for kw in topic_keywords if kw in text_blob)
-        # T2.2: Relaxed from ≥2 to ≥1 keyword hit — previous threshold was
-        # too aggressive (94% rejection rate).  Single-keyword matches are
-        # still screened by the LLM in the next step.
-        if overlap >= 1:
+        relevance_score = _score_candidate_for_topic(
+            row,
+            topic_keywords,
+            biomedical_context=biomedical_context,
+        )
+        # T2.2: Generic workflows keep the recall-oriented >=1 keyword guard.
+        # Biomedical grant workflows additionally require either two topic hits
+        # or a high-signal biomedical phrase so one generic token cannot crowd
+        # out UKB/NMR/CKM/CMM papers before LLM screening.
+        if _passes_topic_prefilter(
+            overlap=overlap,
+            relevance_score=relevance_score,
+            biomedical_context=biomedical_context,
+        ):
             row["keyword_overlap"] = overlap
+            row["_topic_relevance_score"] = relevance_score
             filtered_rows.append(row)
         else:
             dropped_count += 1
     # If pre-filter dropped everything, fall back to original (safety valve)
     if not filtered_rows:
         filtered_rows = _parse_jsonl_rows(candidates_text)
+        for row in filtered_rows:
+            row["_topic_relevance_score"] = _score_candidate_for_topic(
+                row,
+                topic_keywords,
+                biomedical_context=biomedical_context,
+            )
+    if biomedical_context and filtered_rows:
+        # OpenAlex returns high-citation general medical reviews first. Rank by
+        # domain signal before token truncation so LLM screening sees topical
+        # UKB/NMR/CKM/CMM papers instead of broad off-topic reviews.
+        filtered_rows.sort(
+            key=lambda r: (
+                float(r.get("_topic_relevance_score", 0) or 0),
+                int(r.get("citation_count", 0) or 0),
+                int(r.get("year", 0) or 0),
+            ),
+            reverse=True,
+        )
+        high_signal = [
+            r for r in filtered_rows
+            if float(r.get("_topic_relevance_score", 0) or 0) >= 3.0
+        ]
+        if len(high_signal) >= 10:
+            filtered_rows = high_signal
     # Truncate abstracts and strip authors to reduce token usage
     for row in filtered_rows:
         abstract = row.get("abstract", "")
@@ -712,8 +981,10 @@ def _execute_literature_screen(
         payload = _safe_json_loads(resp.content, {})
         if isinstance(payload, dict) and isinstance(payload.get("shortlist"), list):
             shortlist = [row for row in payload["shortlist"] if isinstance(row, dict)]
-    # T2.2: Ensure minimum shortlist size of 15 for adequate related work
-    _MIN_SHORTLIST = 15
+    # T2.2: Ensure minimum shortlist size for algorithm-paper workflows.
+    # Biomedical grant workflows prefer strict relevance over padding with
+    # generic reviews, so they do not auto-supplement a partial LLM shortlist.
+    _MIN_SHORTLIST = 5 if biomedical_context else 15
     if not shortlist:
         rows = (
             filtered_rows[:_MIN_SHORTLIST]
@@ -725,7 +996,7 @@ def _execute_literature_screen(
             item["quality_score"] = round(0.72 - idx * 0.015, 3)
             item["keep_reason"] = "Template screened entry"
             shortlist.append(item)
-    elif len(shortlist) < _MIN_SHORTLIST:
+    elif len(shortlist) < _MIN_SHORTLIST and not biomedical_context:
         # T2.2: LLM returned too few — supplement from filtered candidates
         existing_titles = {
             str(s.get("title", "")).lower().strip() for s in shortlist
@@ -744,6 +1015,14 @@ def _execute_literature_screen(
             "Stage 5: Supplemented shortlist to %d papers (minimum: %d)",
             len(shortlist), _MIN_SHORTLIST,
         )
+    elif biomedical_context:
+        logger.info(
+            "Stage 5: Biomedical/grant context detected; keeping %d strictly "
+            "screened papers without padding",
+            len(shortlist),
+        )
+    for row in shortlist:
+        row.pop("_topic_relevance_score", None)
     out = stage_dir / "shortlist.jsonl"
     _write_jsonl(out, shortlist)
     return StageResult(
