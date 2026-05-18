@@ -1,0 +1,87 @@
+project:
+  name: "sz-stib-nmr-cmm-v2"
+  mode: "full-auto"
+
+research:
+  topic: |
+    深圳社区代谢高风险人群基于脂肪酸不饱和度特征的多轴代谢表型与心肾代谢多病共存进展风险研究。
+    核心：基于 UK Biobank NMR 代谢组学前期发现，脂肪酸不饱和度/PUFA 相对不足是心肾代谢多病共存(CMM)
+    进展中最稳定、可复现的代谢轴信号（Unsaturation 稳定性选择频率 1.0，T2D HR=1.464，CMM>=2 HR=1.196）。
+    同时，全谱 249 NMR elastic net 选出糖代谢(Glucose)、肾功能(Creatinine)、炎症(GlycA)、氨基酸(Ala/Gly)、
+    脂蛋白组成等多轴信号，提示脂肪酸不饱和度异常是核心但非唯一的代谢表型。
+    CMM 定义：T2D + 高血压 + CKD + CVD，≥2种为多病共存。
+    前期发现：脂肪酸评分对 T2D 效应最强(HR=1.464)，对 CVD(HR=1.086)和 HTN(HR=1.079)较弱。
+    主要转移路径可能为：脂肪酸异常 → T2D 发生 → 多病累积。
+    split-sample 验证：10/10 方向一致，HR 稳定在 1.18-1.21。
+    本地验证：深圳 SZMB 队列(2700例中心性肥胖 NMR 数据) + T2D 连续体检队列(53万人年)。
+    经费：深圳市面上项目 30万/3年，主要用于扩展 SZMB 代谢组学检测。
+  domains:
+    - "epidemiology"
+    - "metabolomics"
+    - "cardiometabolic-disease"
+    - "public-health"
+  daily_paper_count: 15
+  quality_threshold: 3.5
+  biomedical_query_limit: 12
+
+runtime:
+  timezone: "Asia/Shanghai"
+  max_parallel_tasks: 3
+  approval_timeout_hours: 12
+  retry_limit: 2
+
+notifications:
+  channel: "console"
+  target: ""
+  on_stage_start: true
+  on_stage_fail: true
+  on_gate_required: true
+
+knowledge_base:
+  backend: "markdown"
+  root: "docs/kb"
+
+openclaw_bridge:
+  use_cron: false
+  use_message: false
+  use_memory: false
+  use_sessions_spawn: false
+  use_web_fetch: false
+  use_browser: false
+
+llm:
+  provider: "acp"
+  base_url: ""
+  wire_api: "chat_completions"
+  api_key_env: ""
+  api_key: ""
+  primary_model: ""
+  fallback_models: []
+  acp:
+    agent: "claude"
+    cwd: "/Users/yangyiqun/codex_work/AutoResearchClaw"
+    acpx_command: "/Users/yangyiqun/codex_work/AutoResearchClaw/.tools/acpx/node_modules/.bin/acpx"
+    session_name: "researchclaw-sz-stib-v2"
+    timeout_sec: 1800
+
+security:
+  hitl_required_stages: [5, 9, 20]
+  allow_publish_without_approval: false
+  redact_sensitive_logs: true
+
+experiment:
+  mode: "sandbox"
+  time_budget_sec: 300
+  max_iterations: 10
+  metric_key: "primary_metric"
+  metric_direction: "minimize"
+  sandbox:
+    python_path: "/Users/yangyiqun/codex_work/AutoResearchClaw/.venv/bin/python3"
+    gpu_required: false
+    max_memory_mb: 4096
+
+prompts:
+  custom_file: ""
+
+metaclaw_bridge:
+  enabled: false

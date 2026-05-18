@@ -43,6 +43,12 @@
 
 ---
 
+## Local Run Notes
+
+- `docs/AutoResearchClaw_选题运行全流程记录_codex.md` records the full Codex-run SZ-STIB topic-selection process, including stage1-5 artifacts, resume/checkpoint behavior, KB output, real-search status, manual query correction, shortlist quality, and comparison points for AutoProjectClaw.
+
+---
+
 <table>
 <tr>
 <td width="18%">

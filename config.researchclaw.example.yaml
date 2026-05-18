@@ -8,6 +8,7 @@ research:
     - "machine-learning"
   daily_paper_count: 10
   quality_threshold: 4.0
+  biomedical_query_limit: 8
 
 runtime:
   timezone: "America/New_York"
